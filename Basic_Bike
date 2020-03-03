@@ -1,0 +1,347 @@
+#include <stdint.h>
+#include <stdbool.h>
+#include "stdlib.h"
+#include "inc/hw_ints.h"
+#include "inc/hw_memmap.h"
+#include "inc/hw_uart.h"
+#include "inc/hw_gpio.h"
+#include "inc/hw_pwm.h"
+#include "inc/hw_types.h"
+#include "driverlib/adc.h"
+#include "driverlib/timer.h"
+#include "driverlib/gpio.h"
+#include "driverlib/interrupt.h"
+#include "driverlib/pin_map.h"
+#include "driverlib/rom.h"
+#include "driverlib/rom_map.h"
+#include "driverlib/sysctl.h"
+#include "driverlib/uart.h"
+#include "driverlib/udma.h"
+#include "driverlib/pwm.h"
+#include "driverlib/ssi.h"
+#include "driverlib/systick.h"
+#include "driverlib/adc.h"
+#include "utils/uartstdio.h"
+#include "utils/uartstdio.c"
+#include <string.h>
+
+//Status Registers
+
+int Right_Indicator_Status;
+int Left_Indicator_Status;
+int Head_Light_Status;
+int Horn_Status;
+int Self_Status;
+int Stand_Status;
+
+int Head_Light_Flag;
+int Left_Indicator_Flag;
+int Right_Indicator_Flag;
+int Horn_Flag;
+int Self_Flag;
+int Stand_Flag;
+
+
+
+// Real Time Clock
+
+unsigned int Sec,Min,Hour;
+unsigned int SecFlag;
+
+void Timer0_Isr(){
+     TimerIntClear(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
+    if(SecFlag==0)SecFlag=0xff;else SecFlag=0;
+     Sec++;
+    if(Sec==60)
+    {
+        Sec=0;Min++;
+        if(Min==60)
+        {Min=0;Hour++;
+        if(Hour==12)Hour=0;
+        }
+    }
+}
+
+
+void InitTimer0()
+     {
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);
+     unsigned long ulPeriod;
+     unsigned int Hz =1;   // frequency in Hz
+     ulPeriod = (SysCtlClockGet() / Hz)/ 2;
+     TimerConfigure(TIMER0_BASE,TIMER_CFG_PERIODIC);
+    //
+     TimerLoadSet(TIMER0_BASE, TIMER_A,40000000);
+     TimerIntRegister(TIMER0_BASE, TIMER_A, Timer0_Isr);    // Registering  isr
+     TimerEnable(TIMER0_BASE, TIMER_A);//ROM_TimerEnable(TIMER0_BASE, TIMER_A);
+     IntEnable(INT_TIMER0A);
+     IntMasterEnable();
+     TimerEnable(TIMER0_BASE,TIMER_A);
+     TimerIntEnable(TIMER0_BASE,TIMER_TIMA_TIMEOUT);
+     }
+
+
+void time(){
+    UARTprintf("|hour:%d|min:%d|sec:%d\n", Hour,Min,Sec);
+}
+
+
+// ###########################   UART   ######################################
+
+InitConsole(void)
+{
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
+    GPIOPinConfigure(GPIO_PA0_U0RX);
+    GPIOPinConfigure(GPIO_PA1_U0TX);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
+    UARTClockSourceSet(UART0_BASE, UART_CLOCK_PIOSC);
+    GPIOPinTypeUART(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
+    UARTStdioConfig(0, 115200, 16000000);
+}
+
+//#############     PORT A      ###################################
+#define PORTA_CTL SYSCTL_PERIPH_GPIOA
+#define PORT_A GPIO_PORTA_BASE
+#define HORN GPIO_PIN_2
+#define SELF GPIO_PIN_3
+#define HEADLIGHT GPIO_PIN_4
+
+//#############     PORT F      ###################################
+#define PORTF_CTL SYSCTL_PERIPH_GPIOF
+#define PORT_F GPIO_PORTF_BASE
+#define HEADLIGHT_OUTPUT GPIO_PIN_3
+#define HORN_OUT GPIO_PIN_4
+
+//#############     PORT B      ###################################
+#define PORTB_CTL SYSCTL_PERIPH_GPIOB
+#define PORT_B GPIO_PORTB_BASE
+#define LEFT_OUT GPIO_PIN_3
+#define RIGHT_OUT GPIO_PIN_2
+#define LEFT_IN GPIO_PIN_6
+#define RIGHT_IN GPIO_PIN_7
+
+//#############     PORT D      ###################################
+#define PORTD_CTL SYSCTL_PERIPH_GPIOD
+#define PORT_D GPIO_PORTD_BASE
+#define STAND_IN GPIO_PIN_6
+
+//#############     PORT E      ###################################
+#define PORTE_CTL SYSCTL_PERIPH_GPIOE
+#define PORT_E GPIO_PORTE_BASE
+#define STAND_OUT GPIO_PIN_0
+
+
+
+int main(void)
+{
+
+ //Set the clock to 80Mhz
+  SysCtlClockSet(SYSCTL_SYSDIV_2_5|SYSCTL_USE_PLL|SYSCTL_OSC_MAIN|SYSCTL_XTAL_16MHZ);
+
+  InitConsole();
+//  UARTprintf("Before timer");
+  InitTimer0();
+//  UARTprintf("After timer");
+
+  SysCtlPeripheralEnable(PORTA_CTL);
+  SysCtlPeripheralEnable(PORTF_CTL);
+  SysCtlPeripheralEnable(PORTB_CTL);
+  SysCtlPeripheralEnable(PORTD_CTL);
+  SysCtlPeripheralEnable(PORTE_CTL);
+  SysCtlDelay(3);
+
+  GPIOPinTypeGPIOInput(PORT_A, HEADLIGHT);
+  GPIOPinTypeGPIOInput(PORT_A, HORN);
+  GPIOPinTypeGPIOInput(PORT_A, SELF);
+  GPIOPinTypeGPIOInput(PORT_B, LEFT_IN);
+  GPIOPinTypeGPIOInput(PORT_B, RIGHT_IN);
+  GPIOPinTypeGPIOInput(PORT_D, STAND_IN);
+
+  GPIOPinTypeGPIOOutput(PORT_F, HEADLIGHT_OUTPUT);
+  GPIOPinTypeGPIOOutput(PORT_F, HORN_OUT);
+  GPIOPinTypeGPIOOutput(PORT_B, RIGHT_OUT);
+  GPIOPinTypeGPIOOutput(PORT_B, LEFT_OUT);
+  GPIOPinTypeGPIOOutput(PORT_E, STAND_OUT);
+
+
+
+// ###############              Pull Down Resistor          #############################
+
+  GPIOPadConfigSet(PORT_B ,RIGHT_IN,GPIO_STRENGTH_2MA,GPIO_PIN_TYPE_STD_WPD);
+  GPIOPadConfigSet(PORT_B ,LEFT_IN,GPIO_STRENGTH_2MA,GPIO_PIN_TYPE_STD_WPD);
+  GPIOPadConfigSet(PORT_A ,HEADLIGHT,GPIO_STRENGTH_2MA,GPIO_PIN_TYPE_STD_WPD);
+  GPIOPadConfigSet(PORT_A ,HORN,GPIO_STRENGTH_2MA,GPIO_PIN_TYPE_STD_WPD);
+  GPIOPadConfigSet(PORT_A ,SELF,GPIO_STRENGTH_2MA,GPIO_PIN_TYPE_STD_WPD);
+  GPIOPadConfigSet(PORT_D ,STAND_IN,GPIO_STRENGTH_2MA,GPIO_PIN_TYPE_STD_WPD);
+
+  uint32_t value1=0;
+  uint32_t value2=0;
+  uint32_t value3=0;
+  uint32_t value4=0;
+  uint32_t value5=0;
+
+  uint8_t state1=0;
+  uint8_t state2=0;
+  uint8_t state3=0;
+  uint8_t state4=0;
+  uint8_t state5=0;
+
+  while(1){
+
+// ##############################     Read The Push Buttons ######################
+
+     value1= GPIOPinRead(PORT_A, HEADLIGHT);
+     value2= GPIOPinRead(PORT_B, LEFT_IN);
+     value3= GPIOPinRead(PORT_B, RIGHT_IN);
+     value4= GPIOPinRead(PORT_A, HORN);
+     value5= GPIOPinRead(PORT_D, STAND_IN);
+     SysCtlDelay(700);
+
+ // ###############################   Head Light     ##############################
+
+     if( (value1 & HEADLIGHT)==HEADLIGHT)
+     {
+     state1^=HEADLIGHT_OUTPUT;
+     GPIOPinWrite(PORT_F,HEADLIGHT_OUTPUT, state1);
+     SysCtlDelay(70000);
+     Head_Light_Status = 1;
+     }
+
+     else{
+         GPIOPinWrite(PORT_F,HEADLIGHT_OUTPUT, 0);
+          Head_Light_Status = 0;
+         }
+
+     if((Head_Light_Status == 1)&&(Head_Light_Flag == 1)){
+         Head_Light_Flag = 0;
+         UARTprintf("head_light=status:%d", Head_Light_Status);
+         time();
+         }
+
+     else if((Head_Light_Status == 0)&&(Head_Light_Flag == 0)){
+         Head_Light_Flag = 1;
+         UARTprintf("head_light=status:%d", Head_Light_Status);
+         time();
+         }
+
+
+ // ###############################   Left Indicator Light     ############################
+
+     if( (value2 & LEFT_IN)==LEFT_IN)
+         {
+         state2^=LEFT_OUT;
+         GPIOPinWrite(PORT_B,LEFT_OUT, state2);
+         SysCtlDelay(70000);
+         Left_Indicator_Status = 1;
+       }
+
+     else{
+         GPIOPinWrite(PORT_B,LEFT_OUT, 0);
+         Left_Indicator_Status = 0;
+     }
+
+     if((Left_Indicator_Status == 1)&&(Left_Indicator_Flag == 1)){
+         Left_Indicator_Flag = 0;
+         UARTprintf("left_indicator=status:%d", Left_Indicator_Status);
+         time();
+         }
+
+     else if((Left_Indicator_Status == 0)&&(Left_Indicator_Flag == 0)){
+         Left_Indicator_Flag = 1;
+         UARTprintf("left_indicator=status:%d", Left_Indicator_Status);
+         time();
+          }
+
+
+
+// ###############################   Right Indicator Light     ############################
+     if( (value3 & RIGHT_IN)==RIGHT_IN)
+         {
+         state3^=RIGHT_OUT;
+         GPIOPinWrite(PORT_B,RIGHT_OUT, state3);
+         SysCtlDelay(70000);
+         Right_Indicator_Status = 1;
+         }
+
+         else{
+             GPIOPinWrite(PORT_B,RIGHT_OUT, 0);
+             Right_Indicator_Status = 0;
+              }
+
+
+          if((Right_Indicator_Status == 1)&&(Right_Indicator_Flag == 1)){
+              Right_Indicator_Flag = 0;
+              UARTprintf("right_indicator=status:%d", Right_Indicator_Status);
+              time();
+              }
+
+          else if((Right_Indicator_Status == 0)&&(Right_Indicator_Flag == 0)){
+              Right_Indicator_Flag = 1;
+              UARTprintf("right_indicator=status:%d", Right_Indicator_Status);
+              time();
+               }
+
+// ###############################   HORN Sound          ############################
+
+          if( (value4 & HORN)==HORN)
+              {
+              state4^=HORN;
+              GPIOPinWrite(PORT_F, HORN_OUT,HORN_OUT);
+              SysCtlDelay(70000);
+              Horn_Status = 1;
+              }
+
+              else{
+                  GPIOPinWrite(PORT_F,HORN_OUT, 0);
+                  Horn_Status = 0;
+                   }
+
+
+               if((Horn_Status == 1)&&(Horn_Flag == 1)){
+                   Horn_Flag = 0;
+                   UARTprintf("horn_flag=status:%d", Horn_Status);
+                   time();
+                   }
+
+               else if((Horn_Status == 0)&&(Horn_Flag == 0)){
+                   Horn_Flag = 1;
+                   UARTprintf("horn_flag=status:%d", Horn_Status);
+                   time();
+                    }
+
+                 SysCtlDelay(80000 / 12);
+
+     // ###############################   Stand Condition     ############################
+
+               if( (value5 & STAND_IN)==STAND_IN)
+                   {
+                   state5^=STAND_IN;
+                   GPIOPinWrite(PORT_E, STAND_OUT,STAND_OUT);
+                   SysCtlDelay(70000);
+                   Stand_Status = 1;
+                   }
+
+                   else{
+                       GPIOPinWrite(PORT_E,STAND_OUT, 0);
+                       Stand_Status = 0;
+                        }
+
+
+                    if((Stand_Status== 1)&&(Stand_Flag== 1)){
+                        Stand_Flag = 0;
+                        UARTprintf("Stand_Status=status:%d", Stand_Status);
+                        time();
+                        }
+
+                    else if((Stand_Status == 0)&&(Stand_Flag == 0)){
+                        Stand_Flag = 1;
+                        UARTprintf("Stand_Status=status:%d", Stand_Status);
+                        time();
+                         }
+
+                      SysCtlDelay(8000 / 12);
+
+
+                 }
+            }
+
